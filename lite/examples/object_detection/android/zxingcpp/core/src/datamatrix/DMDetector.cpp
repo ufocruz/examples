@@ -791,7 +791,7 @@ static DetectorResult DetectNew(const BitMatrix& image, bool tryHarder, bool try
 #endif
 
 	// disable expensive multi-line scan to detect off-center symbols for now
-	tryHarder = false;
+	tryHarder = true;
 
 	// a history log to remember where the tracing already passed by to prevent a later trace from doing the same work twice
 	ByteMatrix history;

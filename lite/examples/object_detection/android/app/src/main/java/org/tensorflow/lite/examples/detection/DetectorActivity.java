@@ -25,6 +25,7 @@ import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Paint.Style;
+import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
@@ -36,17 +37,27 @@ import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.util.Size;
 import android.util.TypedValue;
+import android.widget.ImageView;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
 import com.example.zxingcpp.BarcodeReader;
+import com.google.android.gms.tasks.OnFailureListener;
+import com.google.android.gms.tasks.OnSuccessListener;
+import com.google.android.gms.tasks.Task;
+import com.google.mlkit.vision.barcode.Barcode;
+import com.google.mlkit.vision.barcode.BarcodeScanner;
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions;
+import com.google.mlkit.vision.barcode.BarcodeScanning;
+import com.google.mlkit.vision.common.InputImage;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.DecodeHintType;
 import com.google.zxing.MultiFormatReader;
-import com.google.zxing.PlanarYUVLuminanceSource;
+import com.google.zxing.RGBLuminanceSource;
 import com.google.zxing.Result;
 import com.google.zxing.common.HybridBinarizer;
 
@@ -90,7 +101,7 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
     private static final DetectorMode MODE = DetectorMode.TF_OD_API;
     // Minimum detection confidence to track a detection.
     private static final float MINIMUM_CONFIDENCE_TF_OD_API = 0.6f;
-    private static final boolean MAINTAIN_ASPECT = false;
+    private static final boolean MAINTAIN_ASPECT = true;
     private static final Size DESIRED_PREVIEW_SIZE = new Size(3840, 2160);
     private static final boolean SAVE_PREVIEW_BITMAP = false;
     private static final float TEXT_SIZE_DIP = 10;
@@ -119,16 +130,12 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
 
     private BorderedText borderedText;
 
-    private ToneGenerator beeper = new ToneGenerator(AudioManager.STREAM_NOTIFICATION, 50);
-    private String lastText = new String();
-    private Rect cropRect = new Rect();
-    private Integer imageRotation = 0;
-    private Integer imageWidth = 0;
-    private Integer imageHeight = 0;
+//    private int aumentoDeBorda = DESIRED_PREVIEW_SIZE.getHeight() / 100;
+    private int aumentoDeBorda = 20;
 
 
-    int widthScale = 0;
-    int heightScale = 0;
+    Map<DecodeHintType, Object> hints = new HashMap<>();
+
 
     @Override
     public void onPreviewSizeChosen(final Size size, final int rotation) {
@@ -164,6 +171,9 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
         previewWidth = size.getWidth();
         previewHeight = size.getHeight();
 
+        hints.put(DecodeHintType.POSSIBLE_FORMATS, Arrays.asList(BarcodeFormat.DATA_MATRIX));
+        hints.put(DecodeHintType.TRY_HARDER, true);
+
         sensorOrientation = rotation - getScreenOrientation();
         LOGGER.i("Camera orientation relative to screen canvas: %d", sensorOrientation);
 
@@ -171,8 +181,6 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
         rgbFrameBitmap = Bitmap.createBitmap(previewWidth, previewHeight, Config.ARGB_8888);
         croppedBitmap = Bitmap.createBitmap(cropSize, cropSize, Config.ARGB_8888);
 
-        widthScale = rgbFrameBitmap.getWidth() / TF_OD_API_INPUT_SIZE;
-        heightScale = rgbFrameBitmap.getHeight() / TF_OD_API_INPUT_SIZE;
 
 
         frameToCropTransform =
@@ -232,6 +240,12 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
         trackingOverlay.postInvalidate();
         BarcodeReader readerCpp = new BarcodeReader();
 
+        BarcodeScannerOptions options =
+                new BarcodeScannerOptions.Builder()
+                        .setBarcodeFormats(
+                                Barcode.FORMAT_DATA_MATRIX)
+                        .build();
+
         // No mutex needed as this method is not reentrant.
         if (computingDetection) {
             readyForNextImage();
@@ -268,10 +282,6 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
                         paint.setStyle(Style.STROKE);
                         paint.setStrokeWidth(2.0f);
 
-                        Map<DecodeHintType, Object> hints = new HashMap<>();
-                        hints.put(DecodeHintType.POSSIBLE_FORMATS, Arrays.asList(BarcodeFormat.DATA_MATRIX));
-                        hints.put(DecodeHintType.TRY_HARDER, true);
-
                         float minimumConfidence = MINIMUM_CONFIDENCE_TF_OD_API;
                         switch (MODE) {
                             case TF_OD_API:
@@ -284,119 +294,53 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
 
                         for (final Detector.Recognition result : results) {
                             final RectF location = result.getLocation();
-//                            final Rect rect = new Rect(0, 0, 0, 0);
-//                            location.round(rect);
 
+
+                            String resultText = "";
 
                             if (location != null && result.getConfidence() >= minimumConfidence) {
 
-                                int left = Math.round(location.left * widthScale);
-                                int top = Math.round(location.top * heightScale);
-                                int right = Math.round(location.right * widthScale);
-                                int bottom = Math.round(location.bottom * heightScale);
-
-//                                keydotBitmap = Bitmap.createBitmap(cropCopyBitmap, Math.max(0, rect.left - 20), Math.max(0, rect.top - 10), Math.min(cropCopyBitmap.getWidth(), rect.width() + 40), Math.min(cropCopyBitmap.getHeight(), rect.height() + 20));
-                                keydotBitmap = Bitmap.createBitmap(rgbFrameBitmap, left, top, right - left, bottom - top);
-//                                ImageUtils.saveBitmap(keydotBitmap);
-//
-//                                try (FileOutputStream out = new FileOutputStream("/keydots/keydot_" + total + ".png")) {
-//                                    keydotBitmap.compress(Bitmap.CompressFormat.PNG, 100, out); // bmp is your Bitmap instance
-//                                    // PNG is a lossless format, the compression factor (100) is ignored
-//                                } catch (IOException e) {
-//                                    e.printStackTrace();
-//                                }
-                                Date currentTime = Calendar.getInstance().getTime();
-                                String path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES).toString();
-                                OutputStream fOut = null;
-                                Integer counter = 0;
-                                File file = new File(path, "keydot/keydot_" + currentTime.getTime() + ".jpg"); // the File to save , append increasing numeric counter to prevent files from getting overwritten.
-                                try {
-                                    fOut = new FileOutputStream(file);
-//                                Bitmap pictureBitmap = getImageBitmap(myurl); // obtaining the Bitmap
-                                    keydotBitmap.compress(Bitmap.CompressFormat.JPEG, 100, fOut); // saving the Bitmap to a file compressed as a JPEG with 85% compression rate
-                                    fOut.flush(); // Not really required
-                                    fOut.close(); // do not forget to close the stream
-
-                                    MediaStore.Images.Media.insertImage(getContentResolver(),file.getAbsolutePath(),file.getName(),file.getName());
-                                } catch (FileNotFoundException e) {
-                                    e.printStackTrace();
-                                } catch (IOException e) {
-                                    e.printStackTrace();
-                                }
-
-                                total++;
-
-                                int width = keydotBitmap.getWidth();
-                                int height = keydotBitmap.getHeight();
-
-                                int size = keydotBitmap.getRowBytes() * height;
-                                ByteBuffer byteBuffer = ByteBuffer.allocate(size);
-                                keydotBitmap.copyPixelsToBuffer(byteBuffer);
-                                byte[] byteArray = byteBuffer.array();
-
-                                PlanarYUVLuminanceSource planarYUVLuminanceSource = new PlanarYUVLuminanceSource(
-                                        byteArray, width, height,
-                                        0, 0, width, height,
-                                        false
-                                );
-
-//                                keydotBitmap.recycle();
-
-//                                var invert = planarYUVLuminanceSource.invert();
-
-                                BinaryBitmap bitmap = new BinaryBitmap(
-                                        new HybridBinarizer(
-                                                planarYUVLuminanceSource.invert()
-                                        )
-                                );
-
-                                String resultText = "";
-
-                                try {
-                                    Result resultJava = readerJava.decode(bitmap, hints);
-
-                                    if(resultJava != null) {
-                                        resultText = resultJava.getBarcodeFormat() + ": " + resultJava.getText();
-                                    }
-
-                                }catch (final Exception e) {
-                                    e.printStackTrace();
-                                    LOGGER.e(e, "Exception detectando keydot!");
-                                    Toast toast =
-                                            Toast.makeText(
-                                                    getApplicationContext(), "Erro ao detectar keydot", Toast.LENGTH_SHORT);
-                                    toast.show();
-                                }
-//
-//                                try {
-//
-//                                    readerCpp.setOptions(new BarcodeReader.Options(
-//                                            new HashSet(Arrays.asList(BarcodeReader.Format.DATA_MATRIX)),
-//                                            false,
-//                                            false
-//                                    ));
-//
-//                                    BarcodeReader.Result reconhecido = readerCpp.read(keydotBitmap, rect, sensorOrientation);
-////                      runtime2 += reconhecido?.time?.toInt() ?: 0
-//                                    if(reconhecido != null) {
-//                                        resultText = reconhecido.getFormat() + ": " + reconhecido.getText();
-//
-//                                    }
-//                                } catch (final Throwable e) {
-//                                    e.printStackTrace();
-//                                    LOGGER.e(e, "Exception detectando keydot!");
-//                                    Toast toast =
-//                                            Toast.makeText(
-//                                                    getApplicationContext(), "Erro ao detectar keydot", Toast.LENGTH_SHORT);
-//                                    toast.show();
-////                      finish();
-//                                }
-
                                 // DESENHO DO QUADRADO NA IMAGEM
                                 canvas.drawRect(location, paint);
-                                canvas.drawText(resultText, location.left, location.top + 10, paint);
 
                                 cropToFrameTransform.mapRect(location);
+                                Rect realLocation = new Rect(
+                                        Math.max(0, Math.round(location.left - aumentoDeBorda)),
+                                        Math.max(0, Math.round(location.top - aumentoDeBorda)),
+                                        Math.min(rgbFrameBitmap.getWidth(), Math.round(location.right + aumentoDeBorda)),
+                                        Math.min(rgbFrameBitmap.getHeight(), Math.round(location.bottom + aumentoDeBorda)));
+
+                                Bitmap tempKeydotBitmap = Bitmap.createBitmap(rgbFrameBitmap,
+                                        realLocation.left,
+                                        realLocation.top,
+                                        realLocation.width(),
+                                        realLocation.height());
+
+                                keydotBitmap = readerCpp.invertBitmap(tempKeydotBitmap);
+
+                                int width = tempKeydotBitmap.getWidth();
+                                int height = tempKeydotBitmap.getHeight();
+/*
+                                float scaleWidth = ((float) width * 2) / width;
+                                float scaleHeight = ((float) height * 2) / height;
+
+                                Matrix matrix = new Matrix();
+                                // RESIZE THE BIT MAP
+                                matrix.postScale(scaleWidth, scaleHeight);
+                                matrix.postRotate(sensorOrientation);
+*/
+                                // "RECREATE" THE NEW BITMAP
+//                                keydotBitmap = Bitmap.createBitmap(
+//                                        tempKeydotBitmap, 0, 0, width, height, matrix, false);
+                                tempKeydotBitmap.recycle();
+
+                                mlBarcodeScanner(options);
+
+//                                javaDecode();
+
+
+//                                decodeCpp(realLocation, readerCpp);
+
 
                                 result.setLocation(location);
                                 mappedRecognitions.add(result);
@@ -415,10 +359,131 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
                                         showFrameInfo(previewWidth + "x" + previewHeight);
                                         showCropInfo(cropCopyBitmap.getWidth() + "x" + cropCopyBitmap.getHeight());
                                         showInference(lastProcessingTimeMs + "ms");
+                                        showKeydot(keydotBitmap);
                                     }
                                 });
                     }
                 });
+    }
+
+    private void mlBarcodeScanner(BarcodeScannerOptions options) {
+        InputImage image = InputImage.fromBitmap(keydotBitmap, 0);
+        BarcodeScanner scanner = BarcodeScanning.getClient(options);
+
+        Task<List<Barcode>> resultMl = scanner.process(image)
+                .addOnSuccessListener(new OnSuccessListener<List<Barcode>>() {
+                    @Override
+                    public void onSuccess(List<Barcode> barcodes) {
+                        // Task completed successfully
+                        // ...
+
+                        for (Barcode barcode: barcodes) {
+                            Rect bounds = barcode.getBoundingBox();
+                            Point[] corners = barcode.getCornerPoints();
+
+                            String rawValue = barcode.getRawValue();
+
+                            Toast toast =
+                                    Toast.makeText(
+                                            getApplicationContext(), rawValue, Toast.LENGTH_SHORT);
+                            toast.show();
+
+                            int valueType = barcode.getValueType();
+                            // See API reference for complete list of supported types
+                            switch (valueType) {
+                                case Barcode.TYPE_WIFI:
+                                    String ssid = barcode.getWifi().getSsid();
+                                    String password = barcode.getWifi().getPassword();
+                                    int type = barcode.getWifi().getEncryptionType();
+                                    break;
+                                case Barcode.TYPE_URL:
+                                    String title = barcode.getUrl().getTitle();
+                                    String url = barcode.getUrl().getUrl();
+                                    break;
+                            }
+                        }
+                    }
+                })
+                .addOnFailureListener(new OnFailureListener() {
+                    @Override
+                    public void onFailure(@NonNull Exception e) {
+                        // Task failed with an exception
+                        // ...
+                        e.printStackTrace();
+                        LOGGER.e(e, "Exception detectando keydot!");
+                        Toast toast =
+                                Toast.makeText(
+                                        getApplicationContext(), "Erro ao detectar keydot", Toast.LENGTH_SHORT);
+                        toast.show();
+                    }
+                });
+
+        LOGGER.e(resultMl.toString(), "O que tem no resultado");
+    }
+
+    private void decodeCpp(Rect realLocation, BarcodeReader readerCpp) {
+        String resultText;
+        try {
+
+            readerCpp.setOptions(new BarcodeReader.Options(
+                   new HashSet(Arrays.asList(BarcodeReader.Format.DATA_MATRIX)),
+                    true,
+                    true
+            ));
+
+            BarcodeReader.Result reconhecido = readerCpp.read(keydotBitmap, realLocation, sensorOrientation);
+
+            if(reconhecido != null) {
+                resultText = reconhecido.getFormat() + ": " + reconhecido.getText();
+                Toast toast =
+                        Toast.makeText(
+                                getApplicationContext(), resultText, Toast.LENGTH_SHORT);
+                toast.show();
+            }
+        } catch (final Throwable e) {
+            e.printStackTrace();
+            LOGGER.e(e, "Exception detectando keydot!");
+            Toast toast =
+                    Toast.makeText(
+                            getApplicationContext(), "Erro ao detectar keydot", Toast.LENGTH_SHORT);
+            toast.show();
+
+        }
+    }
+
+    private void javaDecode() {
+        String resultText;
+
+
+        try {
+
+            int width = keydotBitmap.getWidth(), height = keydotBitmap.getHeight();
+
+            int[] pixels = new int[width * height];
+            keydotBitmap.getPixels(pixels, 0, width, 0, 0, width, height);
+            RGBLuminanceSource source = new RGBLuminanceSource(width, height, pixels);
+
+            BinaryBitmap bBitmap = new BinaryBitmap(new HybridBinarizer(source.invert()));
+
+            Result resultJava = readerJava.decode(bBitmap, hints);
+
+            if(resultJava != null) {
+                resultText = resultJava.getBarcodeFormat() + ": " + resultJava.getText();
+
+                Toast toast =
+                        Toast.makeText(
+                                getApplicationContext(), resultText, Toast.LENGTH_SHORT);
+                toast.show();
+            }
+
+        }catch (final Exception e) {
+            e.printStackTrace();
+            LOGGER.e(e, "Exception detectando keydot!");
+            Toast toast =
+                    Toast.makeText(
+                            getApplicationContext(), "Erro ao detectar keydot", Toast.LENGTH_SHORT);
+            toast.show();
+        }
     }
 
     @Override

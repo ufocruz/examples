@@ -46,8 +46,16 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:src="@drawable/tfl2_logo" />
+
+
         </androidx.appcompat.widget.Toolbar>
 
+        <ImageView
+            android:id="@+id/keydotView"
+            android:layout_width="240px"
+            android:layout_height="240px"
+            android:layout_centerVertical="true"
+            />
     </RelativeLayout>
 
     <include
